@@ -25,11 +25,13 @@ Also present (not required): CSR1000v, vSRX, vJunos-router, Apstra.
 
 Wire = tcpdump on peer container `eth1` (clab veth into vrnetlab).
 
+Green run (`/tmp/forge_vendor_peer_report.json` on lab host): **27/27 PASS**.
+
 | Peer | Docker health | Link | UDP / LLDP / ARP / STP / BUM smoke | Stress ~200 pps UDP |
 | --- | --- | --- | --- | --- |
-| Aruba AOS-CX | healthy | **PASS** | **PASS** (wire≥1 each) | **PASS** (pps≈190–200, wire seen; one run had `running_mid=False` mid-window with sent≥700) |
-| Juniper vJunos-switch | healthy | **PASS** | **PASS** (wire≥1 each) | **PASS** (pps≈200, wire=200) |
-| Cisco N9Kv | unhealthy\* | **PASS** | **PASS** (wire≥1 each) | **PASS** (pps≈200; wire optional) |
+| Aruba AOS-CX | healthy | **PASS** | **PASS** (wire≥1 each) | **PASS** (wire=200, pps≈199) |
+| Juniper vJunos-switch | healthy | **PASS** | **PASS** (wire≥1 each) | **PASS** (wire=200, pps≈200) |
+| Cisco N9Kv | unhealthy\* | **PASS** | **PASS** (wire≥1 each) | **PASS** (wire=200, pps≈200) |
 
 \*N9Kv Docker healthcheck remained **unhealthy**, but the peer veth still received forge frames. Treated as NOS/vrnetlab health flake, not a forge TX failure.
 
