@@ -1,0 +1,34 @@
+# Example temporary multi-vendor peer lab for Lab Packet Forge.
+# Links trafficgen eth1→Aruba AOS-CX, eth2→vJunos-switch, eth3→Cisco N9Kv.
+# Deploy: clab deploy -t forge-vendor-peers.clab.yml
+# Destroy: clab destroy -t forge-vendor-peers.clab.yml --cleanup
+name: forge-vendors
+
+topology:
+  nodes:
+    trafficgen:
+      kind: linux
+      image: lab-packet-forge/trafficgen:1.0
+      privileged: true
+      ports:
+        - 8080:8080/tcp
+      env:
+        FORGE_GATEWAY_KILL_TARGET: "10.1.0.1"
+        FORGE_LAB_GATEWAY: "10.1.0.1"
+        FORGE_GATEWAY_KILL_TIMEOUT_S: "120"
+    aruba:
+      kind: aruba_aoscx
+      image: vrnetlab/aruba_arubaos-cx:10.18.1002
+      memory: 4G
+    junos:
+      kind: juniper_vjunosswitch
+      image: vrnetlab/juniper_vjunos-switch:24.4R2-S2.6
+      memory: 6G
+    nexus:
+      kind: cisco_n9kv
+      image: vrnetlab/cisco_n9kv:10.1.1
+      memory: 8G
+  links:
+    - endpoints: ["trafficgen:eth1", "aruba:eth1"]
+    - endpoints: ["trafficgen:eth2", "junos:eth1"]
+    - endpoints: ["trafficgen:eth3", "nexus:Ethernet1/1"]

@@ -1,0 +1,19 @@
+name: forge
+
+topology:
+  nodes:
+    trafficgen:
+      kind: linux
+      image: lab-packet-forge/trafficgen:1.0
+      privileged: true
+      ports:
+        - 8080:8080/tcp
+      env:
+        # Lab DUT/GW — mgmt default (172.20.20.1) stays up even when clab-br0 path dies
+        FORGE_GATEWAY_KILL_TARGET: "10.1.0.1"
+        FORGE_LAB_GATEWAY: "10.1.0.1"
+        FORGE_GATEWAY_KILL_TIMEOUT_S: "120"
+    clab-br0:
+      kind: bridge
+  links:
+    - endpoints: ["clab-br0:eth1", "trafficgen:eth1"]

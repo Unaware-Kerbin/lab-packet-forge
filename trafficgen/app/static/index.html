@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lab Packet Forge</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div class="bg" aria-hidden="true"></div>
+  <header class="top">
+    <div class="brand">
+      <span class="mark">◈</span>
+      <div>
+        <div class="name">Lab Packet Forge</div>
+        <div class="tag">clab-native · templates + craft · one stream</div>
+      </div>
+    </div>
+    <nav class="modes" role="tablist">
+      <button type="button" class="mode active" data-mode="templates">Templates</button>
+      <button type="button" class="mode" data-mode="craft">Craft</button>
+    </nav>
+    <div class="tx-bar">
+      <label class="iface">
+        iface
+        <select id="iface"></select>
+      </label>
+      <label class="pps">
+        pps
+        <input id="pps" type="number" min="0.1" step="0.1" value="10" />
+      </label>
+      <label class="ks-target" title="ICMP probe for TX killswitch. auto = container default GW (often clab mgmt). Use DUT/lab GW e.g. 10.1.0.1">
+        killswitch
+        <input id="ks-target" type="text" placeholder="auto / 10.1.0.1" spellcheck="false" />
+      </label>
+      <label class="override" title="Required above protocol hard caps (e.g. ARP &gt; 100 pps)">
+        <input id="allow-dangerous" type="checkbox" />
+        allow dangerous rate
+      </label>
+      <button type="button" id="btn-start" class="primary">Start</button>
+      <button type="button" id="btn-stop" class="danger" disabled>Stop</button>
+    </div>
+  </header>
+
+  <div id="rate-banner" class="rate-banner hidden" role="status"></div>
+  <div id="ks-banner" class="ks-banner" role="status" aria-live="polite"></div>
+
+  <section class="stats" id="stats">
+    <div><span class="k">sent</span> <span id="st-sent">0</span></div>
+    <div><span class="k">pps</span> <span id="st-pps">0</span></div>
+    <div><span class="k">errors</span> <span id="st-err">0</span></div>
+    <div><span class="k">proto</span> <span id="st-proto">—</span></div>
+    <div><span class="k">stop</span> <span id="st-reason">—</span></div>
+    <div><span class="k">killswitch</span> <span id="st-gw">—</span></div>
+    <div class="err-msg" id="st-last"></div>
+  </section>
+
+  <main>
+    <section id="view-templates" class="view">
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="Search protocols…" autocomplete="off" />
+        <div class="cat-pills" id="cat-pills"></div>
+      </div>
+      <div id="gallery" class="gallery"></div>
+    </section>
+
+    <section id="view-craft" class="view hidden">
+      <div class="craft-layout">
+        <aside class="picker">
+          <h2>Add layer</h2>
+          <input id="craft-search" type="search" placeholder="Filter layers…" />
+          <div id="craft-list" class="craft-list"></div>
+        </aside>
+        <div class="stack-pane">
+          <h2>Layer stack</h2>
+          <p class="hint">Same field schemas as Templates. Soft warnings for odd stacks.</p>
+          <div id="stack" class="stack"></div>
+          <div id="craft-warnings" class="warnings"></div>
+          <div class="craft-actions">
+            <button type="button" id="btn-load-template" class="ghost">Load last template</button>
+            <button type="button" id="btn-save-preset" class="ghost">Save preset JSON</button>
+            <button type="button" id="btn-apply-craft" class="primary">Apply to stream</button>
+          </div>
+          <div id="craft-fields" class="fields"></div>
+        </div>
+      </div>
+      <div class="replay-box">
+        <h2>PCAP replay</h2>
+        <input type="file" id="pcap-file" accept=".pcap,.pcapng" />
+        <button type="button" id="btn-upload" class="ghost">Upload &amp; arm</button>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="proto-dialog">
+    <form method="dialog" id="proto-form">
+      <header>
+        <h2 id="dlg-title">Protocol</h2>
+        <p id="dlg-blurb"></p>
+      </header>
+      <div id="dlg-fields" class="fields"></div>
+      <details>
+        <summary>Advanced</summary>
+        <div id="dlg-advanced" class="fields"></div>
+      </details>
+      <footer>
+        <button type="button" id="dlg-craft" class="ghost">Open in Craft</button>
+        <button type="submit" value="cancel" class="ghost">Cancel</button>
+        <button type="button" id="dlg-apply" class="primary">Apply &amp; ready</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
