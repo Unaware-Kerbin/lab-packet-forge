@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from . import registry
 from .builder import BuildError, build_from_stream, stack_warnings
-from .replay import save_upload
+from .replay import evaluate_replay_size, inspect_pcap, save_upload
 from .safety import (
     default_pps_for_protocol,
     evaluate_pps,
@@ -28,7 +28,7 @@ log = logging.getLogger("forge.api")
 
 STATIC = Path(__file__).parent / "static"
 
-app = FastAPI(title="Lab Packet Forge", version="1.2.0")
+app = FastAPI(title="Lab Packet Forge", version="1.3.0")
 
 
 class StreamBody(BaseModel):
@@ -39,6 +39,8 @@ class StreamBody(BaseModel):
     pps: float | None = None
     count: int | None = None
     loop: bool = True
+    loop_count: int | None = None  # 0/None+loop → infinite; N>0 → N passes
+    rate_mode: str = "pps"  # pps | max | original
     pcap_path: str | None = None
     iface: str | None = None
     allow_dangerous_rate: bool = False
@@ -106,9 +108,18 @@ def _enforce_pps(
     return policy.effective, info
 
 
+def _normalize_rate_mode(mode: str | None) -> str:
+    m = (mode or "pps").strip().lower()
+    if m in ("max", "as_fast", "as-fast-as-possible", "wire", "fast"):
+        return "max"
+    if m in ("original", "pcap", "timing"):
+        return "original"
+    return "pps"
+
+
 @app.get("/api/health")
 def health():
-    return {"ok": True, "service": "lab-packet-forge", "protocols": len(registry.all_protocols()), "version": "1.2.0"}
+    return {"ok": True, "service": "lab-packet-forge", "protocols": len(registry.all_protocols()), "version": "1.3.0"}
 
 
 @app.get("/api/safety")
@@ -259,25 +270,117 @@ async def replay_upload(
     file: UploadFile = File(...),
     iface: str | None = None,
     pps: float = 10.0,
+    rate_mode: str = "pps",
     loop: bool = True,
+    loop_count: int = 0,
     allow_dangerous_rate: bool = False,
+    start: bool = False,
 ):
+    """Upload a pcap/pcapng, arm (and optionally start) L2 replay on the selected iface.
+
+    rate_mode: pps | max | original
+    loop_count: 0 = infinite until Stop; N>0 = N full passes (overrides loop=false → 1)
+    """
     data = await file.read()
     if not data:
         raise HTTPException(400, "empty upload")
-    path = save_upload(data, file.filename)
-    _, pps_policy = _enforce_pps("pcap_replay", pps, allow_dangerous_rate=allow_dangerous_rate)
+    try:
+        path = save_upload(data, file.filename)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    try:
+        meta = inspect_pcap(path)
+    except Exception as e:
+        raise HTTPException(400, f"pcap load failed: {e}") from e
+    blocked, size_warn = evaluate_replay_size(meta, allow_dangerous_rate=allow_dangerous_rate)
+    if blocked:
+        raise HTTPException(
+            400,
+            detail={"message": size_warn, "pcap": meta, "requires_override": True},
+        )
+
+    mode = _normalize_rate_mode(rate_mode)
+    # max/original ignore pps for pacing; still record a nominal value for stats/UI.
+    enforce_pps = 0.0 if mode == "max" else (pps if mode == "pps" else max(pps, 1.0))
+    if mode == "max" and not allow_dangerous_rate:
+        # Treat max as exceeding soft guidance — allow but warn; hard-cap style for flood risk.
+        # Use a synthetic high rate so soft/hard policy surfaces in the response.
+        _, pps_policy = _enforce_pps("pcap_replay", 5000.0, allow_dangerous_rate=True)
+        pps_policy = {
+            **pps_policy,
+            "requested": 0.0,
+            "effective": 0.0,
+            "dangerous": True,
+            "warning": (
+                "rate_mode=max sends as fast as the Python L2socket allows — "
+                "can flood the lab fabric. Killswitch still applies."
+            ),
+        }
+        effective_pps = 0.0
+    elif mode == "original":
+        # Original timing: skip hard pps cap (rate comes from capture).
+        _, pps_policy = _enforce_pps("pcap_replay", enforce_pps, allow_dangerous_rate=True)
+        pps_policy = {
+            **pps_policy,
+            "dangerous": bool(meta.get("avg_pps") and meta["avg_pps"] >= 100) or bool(size_warn),
+            "warning": size_warn
+            or (
+                f"Original-timing replay (~{meta.get('avg_pps') or '?'} pps avg). "
+                "Killswitch still applies."
+            ),
+        }
+        effective_pps = 0.0
+    else:
+        effective_pps, pps_policy = _enforce_pps(
+            "pcap_replay", pps, allow_dangerous_rate=allow_dangerous_rate
+        )
+
+    # loop_count 0 + loop True → infinite; loop False → single pass unless loop_count>0
+    if loop_count and loop_count > 0:
+        lc = int(loop_count)
+        loop_flag = True
+    elif not loop:
+        lc = 1
+        loop_flag = False
+    else:
+        lc = 0
+        loop_flag = True
+
     stream = {
         "mode": "replay",
         "protocol": "pcap_replay",
         "pcap_path": path,
-        "config": {"pcap_path": path, "loop": loop},
-        "loop": loop,
-        "pps": pps,
+        "config": {
+            "pcap_path": path,
+            "loop": loop_flag,
+            "loop_count": lc,
+            "rate_mode": mode,
+        },
+        "loop": loop_flag,
+        "loop_count": lc,
+        "rate_mode": mode,
+        "pps": effective_pps,
         "iface": iface or os.environ.get("FORGE_IFACE", "eth1"),
+        "allow_dangerous_rate": allow_dangerous_rate,
     }
-    WORKER.configure(stream, iface=stream["iface"], pps=pps)
-    return {"ok": True, "pcap_path": path, "stream": stream, "pps_policy": pps_policy}
+    WORKER.configure(stream, iface=stream["iface"], pps=effective_pps)
+    if start:
+        WORKER.start()
+    warnings = list(meta.get("warnings") or [])
+    if size_warn and size_warn not in warnings:
+        warnings.append(size_warn)
+    if pps_policy.get("warning"):
+        warnings.append(pps_policy["warning"])
+    return {
+        "ok": True,
+        "pcap_path": path,
+        "pcap": meta,
+        "stream": stream,
+        "pps_policy": pps_policy,
+        "warnings": warnings,
+        "started": bool(start),
+        "stats": WORKER.snapshot() if start else None,
+    }
 
 
 @app.get("/")

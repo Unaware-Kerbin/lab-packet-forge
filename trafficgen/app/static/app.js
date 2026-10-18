@@ -11,6 +11,7 @@ const state = {
   mode: "templates",
   safety: null,
   lastStoppedReason: null,
+  replay: { path: null, meta: null, warnings: [] },
 };
 
 const $ = (s) => document.querySelector(s);
@@ -270,6 +271,97 @@ function setMode(mode) {
   $$(".mode").forEach((b) => b.classList.toggle("active", b.dataset.mode === mode));
   $("#view-templates").classList.toggle("hidden", mode !== "templates");
   $("#view-craft").classList.toggle("hidden", mode !== "craft");
+  const rv = $("#view-replay");
+  if (rv) rv.classList.toggle("hidden", mode !== "replay");
+}
+
+function setReplayStatus(text) {
+  const el = $("#replay-status");
+  if (el) el.textContent = text;
+}
+
+function syncReplayRateMode() {
+  const mode = $("#replay-rate-mode")?.value || "pps";
+  const wrap = $("#replay-pps-wrap");
+  if (wrap) wrap.classList.toggle("hidden", mode !== "pps");
+  if (mode === "max") {
+    updateRateBanner(
+      state.protocols.find((p) => p.id === "pcap_replay"),
+      5000
+    );
+  } else if (mode === "pps") {
+    updateRateBanner(
+      state.protocols.find((p) => p.id === "pcap_replay"),
+      $("#replay-pps")?.value || $("#pps")?.value || 10
+    );
+  } else {
+    const b = $("#rate-banner");
+    if (b) {
+      b.className = "rate-banner";
+      b.textContent =
+        "Original-timing replay follows pcap inter-frame gaps. Killswitch still applies.";
+    }
+  }
+}
+
+async function doReplayUpload({ start = false } = {}) {
+  const file = $("#pcap-file")?.files?.[0];
+  if (!file) {
+    alert("Choose a pcap / pcapng file");
+    return;
+  }
+  const rateMode = $("#replay-rate-mode")?.value || "pps";
+  const ppsEl = $("#replay-pps");
+  const pps = Number(ppsEl?.value || $("#pps")?.value || 10);
+  if (rateMode === "pps" && $("#pps")) $("#pps").value = String(pps);
+  const loops = Number($("#replay-loops")?.value ?? 0);
+  const fd = new FormData();
+  fd.append("file", file);
+  const qs = new URLSearchParams({
+    iface: $("#iface").value,
+    pps: String(pps || 10),
+    rate_mode: rateMode,
+    loop: loops === 0 ? "true" : "false",
+    loop_count: String(Math.max(0, loops | 0)),
+    allow_dangerous_rate: String(!!$("#allow-dangerous")?.checked),
+    start: String(!!start),
+  });
+  const res = await fetch(`/api/replay?${qs}`, { method: "POST", body: fd });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = data.detail;
+    const msg =
+      typeof detail === "object" && detail?.message
+        ? detail.message
+        : detail || data.message || "upload failed";
+    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
+  state.replay.path = data.pcap_path;
+  state.replay.meta = data.pcap || null;
+  state.replay.warnings = data.warnings || [];
+  $("#st-proto").textContent = "pcap_replay";
+  const meta = data.pcap || {};
+  const bits = [
+    `Armed ${meta.frames ?? "?"} frames`,
+    data.pcap_path?.split("/").pop() || data.pcap_path,
+    `mode=${rateMode}`,
+    loops === 0 ? "loop=∞" : `loops=${loops}`,
+  ];
+  if (rateMode === "pps") bits.push(`pps=${pps}`);
+  if (start) bits.push("TX started");
+  setReplayStatus(bits.join(" · "));
+  const warnEl = $("#replay-warnings");
+  if (warnEl) warnEl.textContent = (data.warnings || []).join(" ");
+  if (data.pps_policy?.warning) {
+    const b = $("#rate-banner");
+    b.className = "rate-banner" + (data.pps_policy.dangerous ? " danger" : "");
+    b.textContent = data.pps_policy.warning;
+  }
+  if (start) {
+    state.lastStoppedReason = null;
+    $("#btn-start").disabled = true;
+    $("#btn-stop").disabled = false;
+  }
 }
 
 function renderCraftList(q = "") {
@@ -469,6 +561,19 @@ async function pollStats() {
     }
     $("#btn-start").disabled = !!s.running;
     $("#btn-stop").disabled = !s.running;
+    if (s.protocol === "pcap_replay" && state.replay?.path) {
+      const meta = state.replay.meta || {};
+      const bits = [
+        s.running ? "TX running" : "armed / idle",
+        `sent=${s.sent ?? 0}`,
+        `pps=${(s.pps_actual ?? 0).toFixed?.(1) ?? s.pps_actual}`,
+        `mode=${s.rate_mode || (s.stream || {}).rate_mode || "pps"}`,
+        `loops=${s.loops_done ?? 0}`,
+        `frames=${s.frames_in_stream || meta.frames || "?"}`,
+      ];
+      if (s.errors) bits.push(`errors=${s.errors}`);
+      setReplayStatus(bits.join(" · "));
+    }
   } catch (_) {}
 }
 
@@ -547,23 +652,20 @@ async function init() {
   });
   $("#btn-start").addEventListener("click", () => doStart().catch(alert));
   $("#btn-stop").addEventListener("click", () => doStop().catch(alert));
-  $("#btn-upload").addEventListener("click", async () => {
-    const file = $("#pcap-file").files?.[0];
-    if (!file) return alert("Choose a pcap");
-    const fd = new FormData();
-    fd.append("file", file);
-    const qs = new URLSearchParams({
-      iface: $("#iface").value,
-      pps: String($("#pps").value || 10),
-      loop: "true",
-      allow_dangerous_rate: String(!!$("#allow-dangerous")?.checked),
-    });
-    const res = await fetch(`/api/replay?${qs}`, { method: "POST", body: fd });
-    const data = await res.json();
-    if (!res.ok) return alert(data.detail || "upload failed");
-    $("#st-proto").textContent = "pcap_replay";
-    alert(`Armed replay: ${data.pcap_path}`);
+  $("#replay-rate-mode")?.addEventListener("change", syncReplayRateMode);
+  $("#replay-pps")?.addEventListener("input", syncReplayRateMode);
+  $("#btn-replay-arm")?.addEventListener("click", () => doReplayUpload({ start: false }).catch(alert));
+  $("#btn-replay-start")?.addEventListener("click", () => doReplayUpload({ start: true }).catch(alert));
+  $("#btn-replay-stop")?.addEventListener("click", () => doStop().catch(alert));
+  $("#btn-replay-clear")?.addEventListener("click", () => {
+    state.replay = { path: null, meta: null, warnings: [] };
+    setReplayStatus("No capture armed.");
+    const w = $("#replay-warnings");
+    if (w) w.textContent = "";
+    const f = $("#pcap-file");
+    if (f) f.value = "";
   });
+  syncReplayRateMode();
 
   setInterval(pollStats, 1000);
 }

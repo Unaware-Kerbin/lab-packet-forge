@@ -44,6 +44,9 @@ class TxWorker:
             "pps_actual": 0.0,
             "iface": "eth1",
             "protocol": None,
+            "rate_mode": "pps",
+            "loops_done": 0,
+            "frames_in_stream": 0,
         }
         self.killswitch = GatewayKillswitch(self._auto_stop)
 
@@ -74,6 +77,9 @@ class TxWorker:
             self.stats["protocol"] = stream.get("protocol") or (
                 (stream.get("layers") or [{}])[-1].get("protocol") if stream.get("layers") else None
             )
+            self.stats["rate_mode"] = stream.get("rate_mode") or "pps"
+            self.stats["loops_done"] = 0
+            self.stats["frames_in_stream"] = 0
 
     def start(self) -> None:
         with self._lock:
@@ -87,6 +93,9 @@ class TxWorker:
             self.stats["last_error"] = ""
             self.stats["started_at"] = time.time()
             self.stats["pps_actual"] = 0.0
+            self.stats["rate_mode"] = str(self.stream.get("rate_mode") or "pps")
+            self.stats["frames_in_stream"] = 0
+            self.stats["loops_done"] = 0
             self._thread = threading.Thread(target=self._run, name="tx-worker", daemon=True)
             self._thread.start()
         self.killswitch.arm()
@@ -157,13 +166,31 @@ class TxWorker:
         # Protocols like bum_spam regenerate dst MAC / frame body on every send.
         rebuild_each = stream_rebuild_each(self.stream)
         count = int(self.stream.get("count") or 0)
-        interval = 1.0 / self.pps if self.pps > 0 else 0.0
+        rate_mode = str(self.stream.get("rate_mode") or "pps").lower()
+        if rate_mode in ("max", "as_fast", "as-fast-as-possible", "wire"):
+            rate_mode = "max"
+        elif rate_mode in ("original", "pcap", "timing"):
+            rate_mode = "original"
+        else:
+            rate_mode = "pps"
+        interval = 0.0 if rate_mode == "max" else (1.0 / self.pps if self.pps > 0 else 0.0)
+        # loop_count: 0/None + loop=True → infinite; N>0 → N full passes; loop=False → 1 pass
+        loop_count_raw = self.stream.get("loop_count")
+        if loop_count_raw is not None:
+            lc = int(loop_count_raw)
+            max_loops: int | None = None if lc <= 0 else lc
+        else:
+            max_loops = None if bool(self.stream.get("loop", True)) else 1
         sent_window = 0
         window_t0 = time.monotonic()
         idx = 0
-        loop = bool(self.stream.get("loop", True))
+        loops_done = 0
         next_t = time.monotonic()
         sock = None
+        with self._lock:
+            self.stats["rate_mode"] = rate_mode
+            self.stats["frames_in_stream"] = len(packets)
+            self.stats["loops_done"] = 0
 
         try:
             sock = self._open_l2socket()
@@ -198,12 +225,16 @@ class TxWorker:
                         self.stats["errors"] += 1
                         self.stats["last_error"] = str(e)
                 idx += 1
+                if not rebuild_each and len(packets) and idx % len(packets) == 0:
+                    loops_done += 1
+                    with self._lock:
+                        self.stats["loops_done"] = loops_done
+                    if max_loops is not None and loops_done >= max_loops:
+                        break
                 if count and idx >= count:
                     break
-                if not loop and not rebuild_each and idx >= len(packets):
-                    break
-                if not loop and rebuild_each and count == 0 and idx >= 1:
-                    # rebuild_each + loop=false + no count → send one regenerated frame
+                if rebuild_each and max_loops == 1 and count == 0 and idx >= 1:
+                    # rebuild_each + single-shot + no count → send one regenerated frame
                     break
                 now = time.monotonic()
                 if now - window_t0 >= 1.0:
@@ -211,6 +242,26 @@ class TxWorker:
                         self.stats["pps_actual"] = sent_window / (now - window_t0)
                     sent_window = 0
                     window_t0 = now
+                if rate_mode == "original" and not rebuild_each and len(packets) > 1:
+                    cur = packets[(idx - 1) % len(packets)]
+                    nxt = packets[idx % len(packets)]
+                    try:
+                        dt = float(getattr(nxt, "time", 0) or 0) - float(getattr(cur, "time", 0) or 0)
+                    except (TypeError, ValueError):
+                        dt = 0.0
+                    # Wrap between last→first of a loop: use first inter-frame gap as fallback
+                    if dt < 0:
+                        dt = 0.0
+                    if dt > 0:
+                        deadline = time.monotonic() + min(dt, 5.0)
+                        while not self._stop.is_set() and time.monotonic() < deadline:
+                            remain = deadline - time.monotonic()
+                            if remain > 0.002:
+                                self._stop.wait(min(remain, 0.25))
+                            else:
+                                time.sleep(min(remain, 0.00005))
+                        next_t = time.monotonic()
+                        continue
                 next_t = self._pace(next_t, interval)
         finally:
             try:

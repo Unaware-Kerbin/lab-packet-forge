@@ -112,13 +112,33 @@ register(
         layer="escape",
         craft_slot="payload",
         fields=[
-            field("pcap_path", "PCAP path (server)", "text", False, "", hint="Set via upload API"),
-            field("loop", "Loop", "bool", False, True),
+            field("pcap_path", "PCAP path (server)", "text", False, "", hint="Use Replay tab upload"),
+            field("loop", "Loop forever", "bool", False, True),
+            field("loop_count", "Loop count (0=∞)", "int", False, 0, min=0, hint="0 = until Stop"),
+            field(
+                "rate_mode",
+                "Rate mode",
+                "select",
+                False,
+                "pps",
+                options=[
+                    {"value": "pps", "label": "Fixed pps"},
+                    {"value": "max", "label": "As fast as possible"},
+                    {"value": "original", "label": "Original pcap timing"},
+                ],
+            ),
             field("payload_hex", "Fallback hex if no pcap", "hex", False, "deadbeef", advanced=True),
             field("dst_mac", "Fallback dst MAC", "mac", False, "ff:ff:ff:ff:ff:ff", advanced=True),
             field("src_mac", "Fallback src MAC", "mac", False, "02:00:00:00:00:01", advanced=True),
         ],
         build=_pcap_build,
-        template=TemplateMeta("Loop/rate replay of uploaded capture", "Universal escape — real stack/VC links"),
+        template=TemplateMeta(
+            "Upload pcap/pcapng and replay on eth1 at pps, max, or original timing",
+            "Replay real captures against stack/VC/DUT links — prefer low pps on shared labs",
+            default_pps=10.0,
+            soft_pps_cap=100.0,
+            hard_pps_cap=2000.0,
+            control_plane_risk=True,
+        ),
     )
 )

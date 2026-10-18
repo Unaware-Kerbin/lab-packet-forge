@@ -16,12 +16,13 @@
       <span class="mark">◈</span>
       <div>
         <div class="name">Lab Packet Forge</div>
-        <div class="tag">clab-native · templates + craft · one stream</div>
+        <div class="tag">clab-native · templates · craft · pcap replay</div>
       </div>
     </div>
     <nav class="modes" role="tablist">
       <button type="button" class="mode active" data-mode="templates">Templates</button>
       <button type="button" class="mode" data-mode="craft">Craft</button>
+      <button type="button" class="mode" data-mode="replay">Replay</button>
     </nav>
     <div class="tx-bar">
       <label class="iface">
@@ -87,10 +88,50 @@
           <div id="craft-fields" class="fields"></div>
         </div>
       </div>
-      <div class="replay-box">
-        <h2>PCAP replay</h2>
-        <input type="file" id="pcap-file" accept=".pcap,.pcapng" />
-        <button type="button" id="btn-upload" class="ghost">Upload &amp; arm</button>
+    </section>
+
+    <section id="view-replay" class="view hidden">
+      <div class="replay-panel">
+        <header class="replay-hero">
+          <h2>PCAP replay</h2>
+          <p class="hint">
+            Upload a <code>.pcap</code> / <code>.pcapng</code>, pick rate and loops, then Start.
+            Frames go out in order on the selected iface (usually <strong>eth1</strong>).
+            Gateway killswitch still auto-stops TX if the probe target stays down.
+            Prefer low pps on shared labs — floody captures can stress switches.
+          </p>
+        </header>
+        <div class="replay-grid">
+          <label>
+            Capture file
+            <input type="file" id="pcap-file" accept=".pcap,.pcapng,.cap" />
+          </label>
+          <label>
+            Rate mode
+            <select id="replay-rate-mode">
+              <option value="pps" selected>Fixed pps</option>
+              <option value="max">As fast as possible</option>
+              <option value="original">Original pcap timing</option>
+            </select>
+          </label>
+          <label id="replay-pps-wrap">
+            Replay pps
+            <input id="replay-pps" type="number" min="0.1" step="0.1" value="10" />
+          </label>
+          <label>
+            Loop count
+            <input id="replay-loops" type="number" min="0" step="1" value="0" />
+            <span class="field-hint">0 = infinite until Stop</span>
+          </label>
+        </div>
+        <div class="replay-actions">
+          <button type="button" id="btn-replay-arm" class="ghost">Upload &amp; arm</button>
+          <button type="button" id="btn-replay-start" class="primary">Upload &amp; Start</button>
+          <button type="button" id="btn-replay-stop" class="danger">Stop</button>
+          <button type="button" id="btn-replay-clear" class="ghost">Clear status</button>
+        </div>
+        <div id="replay-status" class="replay-status" aria-live="polite">No capture armed.</div>
+        <div id="replay-warnings" class="warnings"></div>
       </div>
     </section>
   </main>

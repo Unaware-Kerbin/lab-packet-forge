@@ -83,6 +83,8 @@ PROTOCOL_PPS_CAPS: dict[str, tuple[float, float]] = {
     "dhcp_inform": (10.0, 100.0),
     "dhcpv6_relay": (10.0, 100.0),
     "netbios_ns": (10.0, 50.0),
+    # PCAP replay — soft guidance; hard requires allow_dangerous_rate (max/pps floods).
+    "pcap_replay": (100.0, 2000.0),
 }
 
 # Categories / craft layers treated as L2 broadcast / control-plane risky.

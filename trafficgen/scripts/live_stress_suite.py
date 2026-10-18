@@ -495,6 +495,150 @@ def section_killswitch_optional() -> None:
     )
 
 
+def _multipart_file(raw: bytes, filename: str, boundary: str) -> bytes:
+    head = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: application/octet-stream\r\n\r\n"
+    ).encode()
+    return head + raw + f"\r\n--{boundary}--\r\n".encode()
+
+
+def _fetch_sample_replay_pcap() -> bytes:
+    """Build a valid 3-frame UDP pcap inside the forge container; return bytes via base64."""
+    import base64
+
+    rc, out = ssh(
+        f"docker exec {CT} python3 -c \""
+        "from scapy.all import Ether,IP,UDP,Raw,wrpcap;"
+        "pkts=[Ether(src='02:00:00:00:00:01',dst='02:00:00:00:00:02')/"
+        "IP(src='10.0.0.1',dst='10.0.0.2')/UDP(sport=40000,dport=5001)/Raw(b'r%d'%i) "
+        "for i in range(3)];"
+        "wrpcap('/tmp/forge_replay_smoke.pcap', pkts); print('ok')\""
+    )
+    if rc != 0 and "ok" not in out:
+        raise RuntimeError(f"pcap build failed: {out[:200]}")
+    rc2, b64 = ssh(f"docker exec {CT} base64 -w0 /tmp/forge_replay_smoke.pcap")
+    if rc2 != 0 or not b64.strip():
+        raise RuntimeError(f"pcap base64 failed: {b64[:200]}")
+    # ssh may append noise; take last non-empty line
+    token = [ln for ln in b64.splitlines() if ln.strip()][-1].strip()
+    return base64.b64decode(token)
+
+
+def section_pcap_replay() -> None:
+    """Upload a tiny pcap, replay on eth1, confirm wire + stop."""
+    stop_tx()
+    try:
+        raw = _fetch_sample_replay_pcap()
+    except Exception as e:
+        record("replay.build_sample_pcap", False, str(e)[:200])
+        return
+    record("replay.build_sample_pcap", len(raw) > 64, f"bytes={len(raw)}")
+    boundary = "----forgeReplayBoundary7MA4YWxkTrZu0gW"
+    body = _multipart_file(raw, "forge_replay_smoke.pcap", boundary)
+    # Detached tcpdump (survives SSH session) — match ether src; count non-STP forge frames
+    ssh(
+        f"docker exec -d {CT} sh -c \""
+        f"timeout 8 tcpdump -ni eth1 -c 40 -e "
+        f"'ether src 02:00:00:00:00:01' > /tmp/replay_td.out 2>/tmp/replay_td.err\""
+    )
+    time.sleep(0.5)
+    qs = "iface=eth1&pps=20&rate_mode=pps&loop_count=0&start=true&allow_dangerous_rate=false"
+    req = urllib.request.Request(
+        f"{BASE}/api/replay?{qs}",
+        data=body,
+        method="POST",
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            code = r.status
+            resp = json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        code = e.code
+        try:
+            resp = json.loads(e.read().decode())
+        except Exception:
+            resp = {"detail": str(e)}
+    ok_arm = code == 200 and resp.get("ok") and resp.get("started")
+    frames = (resp.get("pcap") or {}).get("frames")
+    record("replay.upload_start", ok_arm, f"code={code} frames={frames}", frames=frames)
+    time.sleep(3.5)
+    _, st = api("GET", "/api/stats")
+    running = st.get("running") is True
+    sent = int(st.get("sent") or 0)
+    proto = st.get("protocol")
+    stop_tx()
+    time.sleep(1.0)
+    _, st2 = api("GET", "/api/stats")
+    stopped = st2.get("running") is False
+    _, cout = ssh(
+        f"docker exec {CT} python3 -c \""
+        "import re; t=open('/tmp/replay_td.out').read();"
+        "print(len(re.findall(r'02:00:00:00:00:01\\\\s*>\\\\s*02:00:00:00:00:02', t)))\""
+    )
+    try:
+        wire = int(cout.strip().splitlines()[-1])
+    except Exception:
+        wire = 0
+    _, preview = ssh(f"docker exec {CT} head -3 /tmp/replay_td.out 2>/dev/null || true")
+    record(
+        "replay.eth1_wire_and_stop",
+        running and sent >= 3 and stopped and proto == "pcap_replay" and wire >= 1,
+        f"running={running} sent={sent} stopped={stopped} wire={wire} proto={proto} preview={preview.strip()[:80]!r}",
+        sent=sent,
+        wire=wire,
+    )
+
+    # Single-pass loop_count=1 should finish without Stop
+    stop_tx()
+    qs2 = "iface=eth1&pps=50&rate_mode=pps&loop_count=1&start=true"
+    req2 = urllib.request.Request(
+        f"{BASE}/api/replay?{qs2}",
+        data=body,
+        method="POST",
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+    try:
+        with urllib.request.urlopen(req2, timeout=20) as r:
+            code2 = r.status
+    except urllib.error.HTTPError as e:
+        code2 = e.code
+    # wait for natural end
+    finished = False
+    last_sent = 0
+    for _ in range(30):
+        time.sleep(0.2)
+        _, st3 = api("GET", "/api/stats")
+        last_sent = int(st3.get("sent") or 0)
+        if not st3.get("running"):
+            finished = True
+            break
+    stop_tx()
+    record(
+        "replay.loop_count_one_finishes",
+        code2 == 200 and finished and last_sent >= 3,
+        f"code={code2} finished={finished} sent={last_sent}",
+        sent=last_sent,
+    )
+
+    # Hard pps reject without override
+    qs3 = "iface=eth1&pps=5000&rate_mode=pps&loop_count=1&start=false&allow_dangerous_rate=false"
+    req3 = urllib.request.Request(
+        f"{BASE}/api/replay?{qs3}",
+        data=body,
+        method="POST",
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+    try:
+        with urllib.request.urlopen(req3, timeout=15) as r:
+            code3 = r.status
+    except urllib.error.HTTPError as e:
+        code3 = e.code
+    record("replay.hard_pps_reject", code3 == 400, f"code={code3}")
+
+
 def section_datapath() -> None:
     rc, out = ssh("ls /sys/class/net/clab-br0/brif/; ip -br link show master clab-br0")
     on_bridge = "eth1" in out and "enp86s0" in out
@@ -555,6 +699,7 @@ def main() -> int:
         section_udp_rates()
         section_killswitch_optional()
         section_protocol_smoke()
+        section_pcap_replay()
         section_stress()
         section_datapath()
     finally:

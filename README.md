@@ -39,12 +39,35 @@ Environment knobs (also set in the Dockerfile / clab file):
 
 - **Templates** — pick a protocol, edit fields, set pps/iface, Start/Stop  
 - **Craft** — stack the same registry layers with stack warnings  
+- **Replay** — upload `.pcap` / `.pcapng`, choose rate mode (fixed pps / as-fast-as-possible / original timing), loop count (0 = until Stop), Start/Stop on the selected iface  
 - **Killswitch** — ICMP probe target in the top bar (`auto` or DUT/lab GW)  
-- **Allow dangerous rate** — required to exceed hard PPS caps on floody/control-plane templates  
+- **Allow dangerous rate** — required to exceed hard PPS caps on floody/control-plane templates (also large replay uploads)
+
+### PCAP replay API
+
+```bash
+# Upload + arm (does not start TX)
+curl -F file=@sample.pcap \
+  "http://<host>:8080/api/replay?iface=eth1&pps=10&rate_mode=pps&loop_count=0"
+
+# Upload + start immediately; Stop with POST /api/stop
+curl -F file=@sample.pcap \
+  "http://<host>:8080/api/replay?iface=eth1&pps=20&rate_mode=pps&loop_count=3&start=true"
+```
+
+| Query | Meaning |
+| --- | --- |
+| `rate_mode` | `pps` (default), `max`, or `original` |
+| `loop_count` | `0` = infinite until Stop; `N` = N full passes |
+| `start` | `true` to begin TX after arm |
+| `allow_dangerous_rate` | required above hard pps / very large captures |
+
+Shared controls: `POST /api/start`, `POST /api/stop`, `GET /api/stats` (includes `sent`, `pps_actual`, `errors`, `loops_done`, `rate_mode`). Killswitch is armed during replay like any other stream.
 
 ## Safety
 
-- Per-protocol **soft** (UI guidance) and **hard** (reject without override) PPS caps for ARP, STP family, LLDP/CDP, IGMP/MLD, DHCP, BUM/UUF floods, routing PDUs, and more  
+- Per-protocol **soft** (UI guidance) and **hard** (reject without override) PPS caps for ARP, STP family, LLDP/CDP, IGMP/MLD, DHCP, BUM/UUF floods, routing PDUs, PCAP replay, and more  
+- Soft/hard **frame and file-size** warnings on replay uploads  
 - **Gateway killswitch** stops TX if configured probe target(s) stay unreachable  
 - Frames are lab stimuli / header skeletons—not production-grade stacks or attack tooling  
 

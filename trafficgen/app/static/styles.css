@@ -265,4 +265,53 @@ dialog header h2 { margin: 0; }
 dialog header p { color: var(--muted); margin: 0.35rem 0 0.8rem; }
 dialog footer { display: flex; justify-content: flex-end; gap: 0.4rem; margin-top: 1rem; flex-wrap: wrap; }
 details { margin-top: 0.75rem; color: var(--muted); }
-.replay-box { margin-top: 1rem; display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+.replay-panel {
+  max-width: 720px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.25rem 1.35rem;
+}
+.replay-hero h2 { margin: 0 0 0.4rem; font-size: 1.35rem; }
+.replay-hero .hint { margin: 0 0 1rem; }
+.replay-hero code {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  color: var(--accent2);
+}
+.replay-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+@media (max-width: 640px) {
+  .replay-grid { grid-template-columns: 1fr; }
+}
+.replay-grid label {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.replay-grid input, .replay-grid select {
+  background: var(--bg1);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  min-width: 0;
+}
+.field-hint { font-size: 0.72rem; color: var(--muted); opacity: 0.85; }
+.replay-actions { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-bottom: 0.85rem; }
+.replay-status {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  color: var(--ink);
+  background: rgba(0,0,0,0.22);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+  min-height: 2.5rem;
+  white-space: pre-wrap;
+}
