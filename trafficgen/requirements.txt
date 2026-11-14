@@ -8,8 +8,9 @@ anyio>=4.14.2
 idna>=3.15
 pydantic>=2.4.0
 # 1.45.0 is still GHSA-xcq7-p3pf-p88h. fastapi>=0.110.0 allows
-# opentelemetry-api>=1.44.0, and 1.45.1 is the first patched release.
-opentelemetry-api>=1.45.1
+# opentelemetry-api>=1.44.0. 1.45.1 cleared that advisory, and 1.45.2 is
+# the first release that clears GHSA-mf5v-w3w3-f6cg (CVE-2026-126360).
+opentelemetry-api>=1.45.2
 scapy>=2.7.0
 python-multipart>=0.0.31
 python-dotenv>=1.2.2
